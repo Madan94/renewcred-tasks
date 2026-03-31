@@ -69,13 +69,24 @@ def main() -> None:
     save_shap_summary(xgb_model, X_test, out_dir / "shap_xgboost_summary.png")
 
     # --- LSTM ---
+    # build_sequences() requires rows grouped by device (same device contiguous);
+    # sort by ts-only interleaves devices and yields zero-length sequence blocks.
+    order_tr = train_meta.sort_values(["device_id", "ts"], kind="mergesort").index
+    order_te = test_meta.sort_values(["device_id", "ts"], kind="mergesort").index
+    X_train_lstm = X_train.loc[order_tr].reset_index(drop=True)
+    y_train_lstm = y_train.loc[order_tr].reset_index(drop=True)
+    train_meta_lstm = train_meta.loc[order_tr].reset_index(drop=True)
+    X_test_lstm = X_test.loc[order_te].reset_index(drop=True)
+    y_test_lstm = y_test.loc[order_te].reset_index(drop=True)
+    test_meta_lstm = test_meta.loc[order_te].reset_index(drop=True)
+
     lstm_model, lstm_scaler, lstm_metrics = train_lstm_soc(
-        X_train.values.astype(np.float32),
-        y_train.values.astype(np.float32),
-        train_meta["device_id"].values,
-        X_test.values.astype(np.float32),
-        y_test.values.astype(np.float32),
-        test_meta["device_id"].values,
+        X_train_lstm.values.astype(np.float32),
+        y_train_lstm.values.astype(np.float32),
+        train_meta_lstm["device_id"].values,
+        X_test_lstm.values.astype(np.float32),
+        y_test_lstm.values.astype(np.float32),
+        test_meta_lstm["device_id"].values,
         plot_dir=out_dir,
         seq_len=10,
     )

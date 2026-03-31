@@ -39,7 +39,8 @@ def train_xgboost_soc(
     base = xgb.XGBRegressor(
         objective="reg:squarederror",
         random_state=random_state,
-        n_jobs=-1,
+        # Avoid joblib+XGBoost thread explosion / worker crashes on laptops.
+        n_jobs=1,
         tree_method="hist",
     )
     tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -48,7 +49,8 @@ def train_xgboost_soc(
         param_grid,
         cv=tscv,
         scoring="neg_mean_squared_error",
-        n_jobs=-1,
+        # Prevent loky worker crashes (TerminatedWorkerError) from parallel CV.
+        n_jobs=1,
         verbose=0,
     )
     t0 = time.perf_counter()

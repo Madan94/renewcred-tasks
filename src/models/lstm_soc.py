@@ -94,6 +94,17 @@ def train_lstm_soc(
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
     n_features = X_train.shape[1]
 
+    # LSTM cannot handle NaNs; impute using train-set medians (also replaces inf).
+    X_train = np.asarray(X_train, dtype=np.float32)
+    X_test = np.asarray(X_test, dtype=np.float32)
+    X_train = np.where(np.isfinite(X_train), X_train, np.nan)
+    X_test = np.where(np.isfinite(X_test), X_test, np.nan)
+    med = np.nanmedian(X_train, axis=0)
+    # If an entire column is NaN, fall back to 0.
+    med = np.where(np.isfinite(med), med, 0.0).astype(np.float32)
+    X_train = np.where(np.isnan(X_train), med, X_train)
+    X_test = np.where(np.isnan(X_test), med, X_test)
+
     scaler = StandardScaler()
     X_tr_s = scaler.fit_transform(X_train)
     X_te_s = scaler.transform(X_test)

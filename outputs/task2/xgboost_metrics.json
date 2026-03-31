@@ -1,0 +1,13 @@
+{
+  "best_params": {
+    "learning_rate": 0.05,
+    "max_depth": 4.0,
+    "n_estimators": 100.0
+  },
+  "test_rmse": 6.761253930114632,
+  "test_mae": 0.750287338857653,
+  "test_r2": 0.9753093007925009,
+  "training_time_sec": 3.21509124000022,
+  "inference_latency_ms_per_sample": 0.0025374279994139215,
+  "cv_best_score_neg_mse": -636.3775213259328
+}

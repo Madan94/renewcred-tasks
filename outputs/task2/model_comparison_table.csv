@@ -1,0 +1,7 @@
+Metric,XGBoost,LSTM,Winner_and_justification
+Test RMSE (SoC %),6.7613,17.7554,Lower is better; compare RMSE/MAE
+Test MAE (SoC %),0.7503,6.8565,Lower is better
+Training time (sec),3.22,63.7,Faster training often XGBoost on tabular
+Inference latency (ms/sample),0.0025,0.0112,Lower is better for online inference
+Interpretability (1–5),4.0,2.0,XGBoost: SHAP + tree structure
+Production readiness (1–5),5.0,3.0,XGBoost: simpler ops deploy; LSTM needs seq buffer
