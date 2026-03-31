@@ -1,5 +1,5 @@
 #Secreet Salt Key fot Hashing IMEI
-SECRET SALT="renewcred_data_engineer_intern_2026"
+SECRET_SALT="renewcred_data_engineer_intern_2026"
 
 #Critical Ranges for Parameters
 SOC_RANGE=(0,100)

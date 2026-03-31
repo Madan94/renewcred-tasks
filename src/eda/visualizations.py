@@ -1,48 +1,204 @@
-import matplotlib.pyplot as plt
-import seaborn as sns
+import matplotlib
+
+matplotlib.use("Agg")
+
+import math
+from pathlib import Path
+from typing import List, Sequence
+
 import folium
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
 from folium.plugins import HeatMap
 
 
-def generate_all_charts(df):
+def _ensure_output_dir(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. SoC Distribution
-    plt.figure()
-    sns.violinplot(y=df["battery_soc_pct"])
-    plt.title("SoC Distribution")
-    plt.savefig("outputs/charts/soc_distribution.png")
 
-    # 2. Temp vs SoC
-    plt.figure()
-    sns.scatterplot(
-        x="battery_soc_pct",
-        y="battery_temp_c",
-        hue="battery_state",
-        data=df
-    )
-    plt.savefig("outputs/charts/temp_vs_soc.png")
+def _top_devices_by_count(df: pd.DataFrame, n: int) -> List[str]:
+    if "device_id" not in df.columns:
+        return []
+    counts = df["device_id"].value_counts(dropna=True)
+    return counts.head(n).index.astype(str).tolist()
 
-    # 3. SoH Time Series (sample devices)
-    plt.figure()
-    sample = df["device_id"].dropna().unique()[:3]
-    for d in sample:
-        subset = df[df["device_id"] == d]
-        plt.plot(subset["ts"], subset["battery_soh_pct"], label=d)
-    plt.legend()
-    plt.savefig("outputs/charts/soh_timeseries.png")
 
-    # 4. GPS Heatmap
-    m = folium.Map(location=[20, 78], zoom_start=5)
-    heat_data = df[["gps_lat", "gps_lon"]].dropna().values.tolist()
-    HeatMap(heat_data).add_to(m)
-    m.save("outputs/charts/gps_heatmap.html")
+def generate_all_charts(df: pd.DataFrame) -> None:
+    df = df.copy()
+    df["ts"] = pd.to_datetime(df.get("ts"), utc=True, errors="coerce")
 
-    # 5. Correlation Heatmap
-    plt.figure()
-    sns.heatmap(df.corr(numeric_only=True))
-    plt.savefig("outputs/charts/correlation_heatmap.png")
+    output_dir = Path("eda_charts")
+    _ensure_output_dir(output_dir)
 
-    # 6. Timeline (basic version)
-    plt.figure()
-    df["device_status"].value_counts().plot(kind="bar")
-    plt.savefig("outputs/charts/state_timeline.png")
+    # 1. SoC distribution across all devices
+    soc = pd.to_numeric(df.get("battery_soc_pct"), errors="coerce").dropna()
+    plt.figure(figsize=(10, 5))
+    if len(soc) > 0:
+        sns.violinplot(y=soc, color="#4C72B0")
+    plt.title("SoC Distribution Across Fleet")
+    plt.ylabel("SoC (%)")
+    plt.tight_layout()
+    plt.savefig(output_dir / "soc_distribution.png", dpi=160)
+    plt.close()
+
+    # 2. Battery temperature vs SoC (colored by battery_state)
+    plt.figure(figsize=(10, 5))
+    temp_soc_df = df[["battery_soc_pct", "battery_temp_c", "battery_state"]].copy()
+    temp_soc_df["battery_soc_pct"] = pd.to_numeric(temp_soc_df["battery_soc_pct"], errors="coerce")
+    temp_soc_df["battery_temp_c"] = pd.to_numeric(temp_soc_df["battery_temp_c"], errors="coerce")
+    temp_soc_df["battery_state"] = temp_soc_df["battery_state"].fillna("Unknown").astype(str)
+    temp_soc_df = temp_soc_df.dropna(subset=["battery_soc_pct", "battery_temp_c"])
+    if not temp_soc_df.empty:
+        sns.scatterplot(
+            data=temp_soc_df,
+            x="battery_soc_pct",
+            y="battery_temp_c",
+            hue="battery_state",
+            s=14,
+            alpha=0.65,
+        )
+    plt.title("Battery Temperature vs SoC")
+    plt.tight_layout()
+    plt.savefig(output_dir / "temp_vs_soc.png", dpi=160)
+    plt.close()
+
+    # 3. Per-device SoH over time (multi-line)
+    plt.figure(figsize=(12, 6))
+    soh_col = "battery_soh_pct"
+    df[soh_col] = pd.to_numeric(df.get(soh_col), errors="coerce")
+    devices = _top_devices_by_count(df, n=5)
+    if len(devices) == 0 and df["device_id"].notna().any():
+        devices = df["device_id"].dropna().astype(str).unique().tolist()[:5]
+    for d in devices:
+        sub = df[df["device_id"].astype(str) == d].sort_values("ts")
+        if sub.empty:
+            continue
+        plt.plot(sub["ts"], sub[soh_col], linewidth=1.5, label=d[:10])
+    if devices:
+        plt.legend(loc="best", fontsize="small", ncol=2, frameon=False)
+    plt.title("Battery SoH Over Time (Sample Devices)")
+    plt.xlabel("Timestamp (UTC)")
+    plt.ylabel("SoH (%)")
+    plt.tight_layout()
+    plt.savefig(output_dir / "soh_timeseries.png", dpi=160)
+    plt.close()
+
+    # 4. GPS heatmap of vehicle locations
+    gps_df = df[["gps_lat", "gps_lon"]].copy()
+    gps_df["gps_lat"] = pd.to_numeric(gps_df["gps_lat"], errors="coerce")
+    gps_df["gps_lon"] = pd.to_numeric(gps_df["gps_lon"], errors="coerce")
+    gps_df = gps_df.dropna(subset=["gps_lat", "gps_lon"])
+    gps_df = gps_df[(gps_df["gps_lat"] != 0) & (gps_df["gps_lon"] != 0)]
+
+    if not gps_df.empty:
+        center_lat = float(gps_df["gps_lat"].mean())
+        center_lon = float(gps_df["gps_lon"].mean())
+    else:
+        center_lat, center_lon = 20.0, 78.0
+
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=5)
+    heat_data = gps_df[["gps_lat", "gps_lon"]].values.tolist()
+    if heat_data:
+        HeatMap(heat_data).add_to(m)
+    m.save(str(output_dir / "gps_heatmap.html"))
+
+    # 5. Correlation heatmap: battery signals x gps signals
+    battery_cols = [
+        "battery_soc_pct",
+        "battery_temp_c",
+        "battery_voltage_v",
+        "battery_soh_pct",
+        "cell_voltage_min",
+        "cell_voltage_max",
+        "battery_capacity_ah",
+        "battery_usable_ah",
+        "capacity_discharge_ah",
+        "capacity_charge_ah",
+    ]
+    gps_cols = ["gps_lat", "gps_lon", "gps_speed_kmh", "gps_delta_km", "gps_total_km"]
+
+    battery_cols = [c for c in battery_cols if c in df.columns]
+    gps_cols = [c for c in gps_cols if c in df.columns]
+
+    corr_out_path = output_dir / "correlation_heatmap.png"
+    plt.figure(figsize=(10, 6))
+    if battery_cols and gps_cols:
+        corr_df = df[battery_cols + gps_cols].apply(pd.to_numeric, errors="coerce")
+        corr = corr_df.corr(numeric_only=True)
+        corr_matrix = corr.loc[battery_cols, gps_cols]
+        sns.heatmap(corr_matrix, cmap="coolwarm", center=0, vmin=-1, vmax=1)
+    else:
+        plt.text(0.5, 0.5, "Insufficient columns for correlation heatmap", ha="center")
+    plt.title("Correlation Heatmap: Battery x GPS")
+    plt.tight_layout()
+    plt.savefig(corr_out_path, dpi=160)
+    plt.close()
+
+    # 6. Operational state timeline: Gantt-style chart for 3 devices
+    plt.figure(figsize=(12, 1.8 * 3 + 2.5))
+    sample_devices = _top_devices_by_count(df, n=3)
+    if len(sample_devices) < 3 and df["device_id"].notna().any():
+        more = df["device_id"].dropna().astype(str).unique().tolist()
+        sample_devices = (sample_devices + more)[:3]
+
+    state_colors = {
+        "Charging": "#F28E2B",
+        "Active": "#59A14F",
+        "Inactive": "#B0B0B0",
+    }
+
+    fig, ax = plt.subplots(figsize=(12, 1.8 * max(1, len(sample_devices)) + 3))
+    ax.set_title("Operational State Timeline (Gantt-style, 3 Sample Devices)")
+
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
+
+    for row_idx, device_id in enumerate(sample_devices):
+        sub = df[df["device_id"].astype(str) == str(device_id)].sort_values("ts").copy()
+        if sub.empty:
+            continue
+
+        # Charging overrides Active/Inactive for this timeline.
+        battery_state = sub["battery_state"].fillna("").astype(str)
+        device_status = sub["device_status"].fillna("Inactive").astype(str)
+        op_state = device_status.where(battery_state.ne("Charging"), "Charging")
+        sub["op_state"] = op_state
+
+        # Build contiguous segments.
+        change_id = sub["op_state"].ne(sub["op_state"].shift()).cumsum()
+        segments = sub.groupby(change_id).agg(
+            state=("op_state", "first"),
+            start_ts=("ts", "min"),
+            end_ts=("ts", "max"),
+        )
+        segments = segments.dropna(subset=["start_ts", "end_ts"])
+        if segments.empty:
+            continue
+
+        y_tuple = (row_idx - 0.4, 0.8)
+        for state, color in state_colors.items():
+            seg_state = segments[segments["state"] == state]
+            if seg_state.empty:
+                continue
+            start_nums = mdates.date2num(np.array(seg_state["start_ts"].dt.to_pydatetime()))
+            end_nums = mdates.date2num(np.array(seg_state["end_ts"].dt.to_pydatetime()))
+            widths = np.maximum(end_nums - start_nums, 1e-6)
+            ax.broken_barh(list(zip(start_nums, widths)), y_tuple, facecolors=color, edgecolor="black", linewidth=0.2)
+
+    ax.set_yticks(range(len(sample_devices)))
+    ax.set_yticklabels([str(d)[:10] for d in sample_devices])
+    ax.set_xlabel("Timestamp (UTC)")
+
+    legend_handles = []
+    import matplotlib.patches as mpatches
+
+    for state, color in state_colors.items():
+        legend_handles.append(mpatches.Patch(color=color, label=state))
+    ax.legend(handles=legend_handles, loc="upper right", ncol=3, frameon=False)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "operational_state_timeline.png", dpi=160, bbox_inches="tight")
+    plt.close(fig)
