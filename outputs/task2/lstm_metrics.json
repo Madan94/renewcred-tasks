@@ -1,7 +1,7 @@
 {
-  "test_rmse": 17.755402078762273,
-  "test_mae": 6.856452941894531,
-  "training_time_sec": 63.69662717400024,
-  "inference_latency_ms_per_sample": 0.011191276000317885,
-  "epochs_ran": 65
+  "test_rmse": 38.086092147121924,
+  "test_mae": 15.148455619812012,
+  "training_time_sec": 48.82438692999858,
+  "inference_latency_ms_per_sample": 0.009954172004654538,
+  "epochs_ran": 64
 }

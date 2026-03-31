@@ -14,6 +14,50 @@ from src.models.xgb_soc import metrics_to_json as xgb_metrics_to_json
 from src.models.xgb_soc import persist_xgb, save_shap_summary, train_xgboost_soc
 
 
+def _save_comparison_table_png(comparison: pd.DataFrame, out_path: Path) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    dfp = comparison.copy()
+
+    for col in ["XGBoost", "LSTM"]:
+        if col in dfp.columns:
+            dfp[col] = dfp[col].apply(lambda x: f"{x:.4g}" if isinstance(x, (float, int, np.floating, np.integer)) else x)
+
+    fig_w = 12
+    fig_h = max(3.5, 0.6 + 0.45 * len(dfp))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.axis("off")
+    tbl = ax.table(
+        cellText=dfp.values,
+        colLabels=dfp.columns.tolist(),
+        loc="center",
+        cellLoc="left",
+        colLoc="left",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(10)
+    tbl.scale(1, 1.35)
+
+    header_color = "#1B5E20"
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#1B5E20")
+        cell.set_linewidth(0.6)
+        if r == 0:
+            cell.set_facecolor(header_color)
+            cell.get_text().set_color("white")
+            cell.get_text().set_weight("bold")
+        else:
+            cell.set_facecolor("#FFFFFF" if r % 2 else "#E8F5E9")
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     models_dir = Path("models")
     out_dir = Path("outputs/task2")
@@ -63,14 +107,13 @@ def main() -> None:
         X_test,
         y_test,
         list(ds.feature_columns),
+        meta_train=train_meta,
     )
     persist_xgb(xgb_model, models_dir / "xgboost_soc.pkl")
     xgb_metrics_to_json(xgb_metrics, out_dir / "xgboost_metrics.json")
     save_shap_summary(xgb_model, X_test, out_dir / "shap_xgboost_summary.png")
 
     # --- LSTM ---
-    # build_sequences() requires rows grouped by device (same device contiguous);
-    # sort by ts-only interleaves devices and yields zero-length sequence blocks.
     order_tr = train_meta.sort_values(["device_id", "ts"], kind="mergesort").index
     order_te = test_meta.sort_values(["device_id", "ts"], kind="mergesort").index
     X_train_lstm = X_train.loc[order_tr].reset_index(drop=True)
@@ -99,7 +142,7 @@ def main() -> None:
     with (out_dir / "lstm_metrics.json").open("w", encoding="utf-8") as f:
         json.dump(lstm_metrics, f, indent=2)
 
-    # --- Comparison table (assignment) ---
+    # --- Comparison table ---
     comparison = pd.DataFrame(
         {
             "Metric": [
@@ -137,6 +180,7 @@ def main() -> None:
         }
     )
     comparison.to_csv(out_dir / "model_comparison_table.csv", index=False)
+    _save_comparison_table_png(comparison, out_dir / "model_comparison_table.png")
 
     # --- Anomalies ---
     flags = build_anomaly_flags_csv(df)
@@ -149,6 +193,7 @@ def main() -> None:
     print(f"  {out_dir / 'shap_xgboost_summary.png'}")
     print(f"  {models_dir / 'lstm_soc.pt'}")
     print(f"  {out_dir / 'model_comparison_table.csv'}")
+    print(f"  {out_dir / 'model_comparison_table.png'}")
     print("  anomaly_flags.csv")
 
 

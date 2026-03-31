@@ -1,0 +1,83 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <title>GPS Anomaly Report</title>
+  <style>
+    :root{ --leaf:#2E7D32; --white:#FFFFFF; --leaf-10:rgba(46,125,50,0.10); --leaf-18:rgba(46,125,50,0.18); }
+    html,body{background:var(--white); color:var(--leaf); margin:0; padding:0;}
+    body{font-family:"Poppins", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; line-height:1.55;}
+    .container{max-width:1000px; margin:0 auto; padding:28px 18px 56px;}
+    .card{border:1px solid var(--leaf-18); border-radius:14px; padding:18px; background:var(--white);}
+    h2{font-size:22px; font-weight:700; margin:0 0 10px;}
+    h3{font-size:16px; font-weight:700; margin:18px 0 10px;}
+    p{margin:8px 0;}
+    table.dataframe{border-collapse:separate; border-spacing:0; width:100%; margin:10px 0 0;}
+    table.dataframe thead th{background:var(--leaf); color:var(--white); padding:10px 12px; text-align:left; border:1px solid var(--leaf);}
+    table.dataframe tbody th{background:var(--leaf-10); padding:10px 12px; text-align:left; border:1px solid var(--leaf-18); font-weight:600;}
+    table.dataframe td{background:var(--white); padding:10px 12px; text-align:left; border:1px solid var(--leaf-18);}
+    img{display:block; max-width:100%; height:auto; border-radius:12px; border:1px solid var(--leaf-18); margin:10px 0;}
+  </style>
+</head>
+<body><div class="container"><div class="card">
+
+<h2>GPS Signal Quality Report (Task 3)</h2>
+<p>Total records: <b>21409</b></p>
+<p>Distinct devices: <b>3</b></p>
+<h3>Per-device anomaly summary</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>device_id</th>
+      <th>n_rows</th>
+      <th>position_jump</th>
+      <th>signal_dropout</th>
+      <th>coordinate_freeze</th>
+      <th>position_jump_rate_pct</th>
+      <th>signal_dropout_rate_pct</th>
+      <th>coordinate_freeze_rate_pct</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>4bf8774e51dd02dea1153b159c0995924a6fef3ec15326e309eb1fd3c94e85b8</td>
+      <td>7629</td>
+      <td>76</td>
+      <td>0</td>
+      <td>713</td>
+      <td>0.996</td>
+      <td>0.0</td>
+      <td>9.346</td>
+    </tr>
+    <tr>
+      <td>66636a19f3587b24105182ce61f324d7c6a4dbaa0935481c42d13296d6ac3988</td>
+      <td>7629</td>
+      <td>0</td>
+      <td>0</td>
+      <td>66</td>
+      <td>0.000</td>
+      <td>0.0</td>
+      <td>0.865</td>
+    </tr>
+    <tr>
+      <td>8d5631559c631200bf30f3fee8893f95eedda10dc1d2aba69f2a6a745edc8c77</td>
+      <td>6151</td>
+      <td>0</td>
+      <td>0</td>
+      <td>1614</td>
+      <td>0.000</td>
+      <td>0.0</td>
+      <td>26.240</td>
+    </tr>
+  </tbody>
+</table>
+<h3>Anomaly counts by device</h3>
+<img src="figures/gps_anomaly_counts_by_device.png" />
+<h3>Position jump severity</h3>
+<img src="figures/gps_position_jump_scatter.png" />
+</div></div></body></html>

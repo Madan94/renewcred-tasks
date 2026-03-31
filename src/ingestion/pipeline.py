@@ -109,9 +109,11 @@ def extract_fields(data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not isinstance(battery, dict):
         battery = {}
 
+    # Requirement: never store raw identifiers. Prefer hashing deviceId; if absent, fall back to IMEI hash.
+    anon_device_id = _hash_identifier(raw_device_id) or _hash_identifier(raw_imei)
     return {
         # Requirement: anonymize device IDs and IMEI values (never store raw PII).
-        "device_id": _hash_identifier(raw_device_id),
+        "device_id": anon_device_id,
         "imei_token": _hash_identifier(raw_imei),
         "last_ping_time": payload.get("lastPingTime"),
         "device_status": payload.get("status"),
@@ -172,9 +174,19 @@ def _coerce_row_ts(parsed: Optional[Dict[str, Any]], row: pd.Series) -> Any:
     Fall back to known CSV columns if present.
     """
     if isinstance(parsed, dict):
-        ts = parsed.get("timestamp")
-        if ts is not None and not (isinstance(ts, float) and pd.isna(ts)):
-            return ts
+        # Prefer root timestamp (common MQTT export shape).
+        for key in ("timestamp", "ts", "created_timestamp", "createdTimestamp"):
+            ts = parsed.get(key)
+            if ts is not None and not (isinstance(ts, float) and pd.isna(ts)):
+                return ts
+
+        # Fallbacks in nested payload.
+        payload = parsed.get("payload")
+        if isinstance(payload, dict):
+            for key in ("timestamp", "ts", "time", "created_timestamp", "createdTimestamp", "lastPingTime"):
+                ts = payload.get(key)
+                if ts is not None and not (isinstance(ts, float) and pd.isna(ts)):
+                    return ts
 
     for col in ("timestamp", "created_timestamp", "ts"):
         if col in row.index:
@@ -201,6 +213,37 @@ def parse_ev_payload(path: str) -> pd.DataFrame:
     records: List[Dict[str, Any]] = []
     skipped = 0
 
+    def _parse_ts_to_utc(ts_raw: Any) -> Any:
+        if ts_raw is None or (isinstance(ts_raw, float) and pd.isna(ts_raw)):
+            return pd.NaT
+
+        # Fast-path numeric epochs
+        if isinstance(ts_raw, (int, float)):
+            v = float(ts_raw)
+            if not pd.isna(v):
+                if v > 1e12:
+                    return pd.to_datetime(v, unit="ms", utc=True, errors="coerce")
+                return pd.to_datetime(v, unit="s", utc=True, errors="coerce")
+            return pd.NaT
+
+        # Numeric strings: "1712345678901" or "1712345678901.0"
+        if isinstance(ts_raw, str):
+            s = ts_raw.strip()
+            if s:
+                # attempt numeric epoch first
+                try:
+                    v = float(s)
+                    if v > 1e12:
+                        return pd.to_datetime(v, unit="ms", utc=True, errors="coerce")
+                    if v > 1e9:
+                        return pd.to_datetime(v, unit="s", utc=True, errors="coerce")
+                except Exception:
+                    pass
+                # fall back to ISO / human-readable timestamps
+                return pd.to_datetime(s, utc=True, errors="coerce")
+
+        return pd.to_datetime(ts_raw, utc=True, errors="coerce")
+
     for _, row in df_raw.iterrows():
         parsed = safe_json_load(row.get(payload_col))
         fields = extract_fields(parsed)
@@ -209,14 +252,7 @@ def parse_ev_payload(path: str) -> pd.DataFrame:
             continue
 
         ts_raw = _coerce_row_ts(parsed, row)
-        if ts_raw is None or (isinstance(ts_raw, float) and pd.isna(ts_raw)):
-            fields["ts"] = pd.NaT
-        elif isinstance(ts_raw, (int, float)) and float(ts_raw) > 1e12:
-            fields["ts"] = pd.to_datetime(ts_raw, unit="ms", utc=True, errors="coerce")
-        elif isinstance(ts_raw, (int, float)):
-            fields["ts"] = pd.to_datetime(float(ts_raw), unit="s", utc=True, errors="coerce")
-        else:
-            fields["ts"] = pd.to_datetime(ts_raw, utc=True, errors="coerce")
+        fields["ts"] = _parse_ts_to_utc(ts_raw)
         records.append(fields)
 
     df = pd.DataFrame.from_records(records, columns=EXPECTED_COLUMNS)

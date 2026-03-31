@@ -1,0 +1,5 @@
+device_id,trip_id,raw_gps_km,matched_route_km,discrepancy_km,discrepancy_pct,match_confidence,match_status
+4bf8774e51dd02dea1153b159c0995924a6fef3ec15326e309eb1fd3c94e85b8,4bf8774e51dd02dea1153b159c0995924a6fef3ec15326e309eb1fd3c94e85b8_1,114.227,,,,0.0,"http_400:{""message"":""Too many trace coordinates"",""code"":""TooBig""}"
+4bf8774e51dd02dea1153b159c0995924a6fef3ec15326e309eb1fd3c94e85b8,4bf8774e51dd02dea1153b159c0995924a6fef3ec15326e309eb1fd3c94e85b8_2,2.3271,,,,0.0,request_error:TimeoutError
+4bf8774e51dd02dea1153b159c0995924a6fef3ec15326e309eb1fd3c94e85b8,4bf8774e51dd02dea1153b159c0995924a6fef3ec15326e309eb1fd3c94e85b8_3,1.0043,,,,0.0,"http_400:{""message"":""Too many trace coordinates"",""code"":""TooBig""}"
+4bf8774e51dd02dea1153b159c0995924a6fef3ec15326e309eb1fd3c94e85b8,4bf8774e51dd02dea1153b159c0995924a6fef3ec15326e309eb1fd3c94e85b8_4,3.899,,,,0.0,"http_400:{""message"":""Too many trace coordinates"",""code"":""TooBig""}"

@@ -12,31 +12,78 @@ class KalmanParams:
     measurement_var: float = 1e-4
 
 
-def _kalman_1d(z: np.ndarray, q: float, r: float) -> np.ndarray:
+def _kalman_2d(lat: np.ndarray, lon: np.ndarray, q: float, r: float) -> tuple[np.ndarray, np.ndarray]:
     """
-    Simple 1D Kalman filter for random-walk model:
-      x_t = x_{t-1} + w,  w~N(0,q)
-      z_t = x_t + v,      v~N(0,r)
+    Simple 2D Kalman filter for a random-walk position model:
+      x_t = x_{t-1} + w,  w~N(0,Q)
+      z_t = x_t + v,      v~N(0,R)
+
+    State: x = [lat, lon]
+    Q and R are diagonal with variances (q, q) and (r, r).
+    Handles NaNs by performing a partial update on available measurement dimensions.
     """
-    x = np.empty_like(z, dtype=float)
-    p = 1.0
-    x_hat = float("nan")
-    for j in range(len(z)):
-        if np.isfinite(z[j]):
-            x_hat = float(z[j])
+    n = int(min(len(lat), len(lon)))
+    lat_s = np.empty(n, dtype=float)
+    lon_s = np.empty(n, dtype=float)
+
+    # initial state from first finite measurement
+    x = np.array([0.0, 0.0], dtype=float)
+    init = False
+    for i in range(n):
+        if np.isfinite(lat[i]) and np.isfinite(lon[i]):
+            x[:] = [float(lat[i]), float(lon[i])]
+            init = True
             break
-    if not np.isfinite(x_hat):
-        x_hat = 0.0
-    for i in range(len(z)):
+    if not init:
+        for i in range(n):
+            if np.isfinite(lat[i]):
+                x[0] = float(lat[i])
+                init = True
+                break
+        for i in range(n):
+            if np.isfinite(lon[i]):
+                x[1] = float(lon[i])
+                init = True
+                break
+
+    P = np.eye(2, dtype=float)  # initial covariance
+    Q = np.eye(2, dtype=float) * float(q)
+    R_full = np.eye(2, dtype=float) * float(r)
+
+    for i in range(n):
         # predict
-        p = p + q
-        # update
-        if np.isfinite(z[i]):
-            k = p / (p + r)
-            x_hat = x_hat + k * (z[i] - x_hat)
-            p = (1 - k) * p
-        x[i] = x_hat
-    return x
+        P = P + Q
+
+        z_lat = lat[i]
+        z_lon = lon[i]
+        have_lat = np.isfinite(z_lat)
+        have_lon = np.isfinite(z_lon)
+
+        if have_lat or have_lon:
+            if have_lat and have_lon:
+                z = np.array([float(z_lat), float(z_lon)], dtype=float)
+                H = np.eye(2, dtype=float)
+                R = R_full
+            elif have_lat:
+                z = np.array([float(z_lat)], dtype=float)
+                H = np.array([[1.0, 0.0]], dtype=float)
+                R = np.array([[float(r)]], dtype=float)
+            else:
+                z = np.array([float(z_lon)], dtype=float)
+                H = np.array([[0.0, 1.0]], dtype=float)
+                R = np.array([[float(r)]], dtype=float)
+
+            # innovation
+            y = z - (H @ x)
+            S = H @ P @ H.T + R
+            K = (P @ H.T) @ np.linalg.inv(S)
+            x = x + (K @ y)
+            P = (np.eye(2, dtype=float) - (K @ H)) @ P
+
+        lat_s[i] = float(x[0])
+        lon_s[i] = float(x[1])
+
+    return lat_s, lon_s
 
 
 def smooth_latlon_kalman(
@@ -58,8 +105,7 @@ def smooth_latlon_kalman(
         lat = d["gps_lat"].to_numpy(dtype=float)
         lon = d["gps_lon"].to_numpy(dtype=float)
         # keep dropouts as NaN; filter handles them by skipping update
-        lat_s = _kalman_1d(lat, params.process_var, params.measurement_var)
-        lon_s = _kalman_1d(lon, params.process_var, params.measurement_var)
+        lat_s, lon_s = _kalman_2d(lat, lon, params.process_var, params.measurement_var)
         d = d.copy()
         d["gps_lat_smooth"] = lat_s
         d["gps_lon_smooth"] = lon_s

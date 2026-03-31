@@ -285,8 +285,39 @@ Implemented in `src/gps/quality.py`:
 
 Implemented in `src/gps/kalman.py`:
 
-- per-device, independent 1D random-walk Kalman filter for `lat` and `lon`
+- per-device **2D** random-walk Kalman filter on state `[lat, lon]` (implemented from scratch)
 - dropouts (NaN) skip measurement update; state continues smoothly
+
+#### Map-matching (optional bonus)
+
+Implemented in `src/gps/map_matching.py` using the **OSRM** public `match` API (OpenStreetMap-backed road network).
+
+- **Opt-in**: network calls are disabled by default.
+- **Enable**:
+
+```bash
+ENABLE_MAP_MATCHING=1 PYTHONPATH=. python task3_gps.py
+```
+
+Output:
+
+- `outputs/task3/trip_route_matching.csv`
+
+Per-trip columns:
+
+| Column | Description |
+|---|---|
+| `raw_gps_km` | Haversine distance over the (smoothed) trip trace |
+| `matched_route_km` | OSRM matched route distance (km) |
+| `discrepancy_km` | `matched_route_km - raw_gps_km` |
+| `discrepancy_pct` | `discrepancy_km / raw_gps_km * 100` |
+| `match_confidence` | OSRM confidence (if returned) |
+| `match_status` | `ok` or an error code (e.g. `http_400:...`, `http_429:...`, `url_error:URLError`) |
+
+Notes:
+
+- Public OSRM can reject requests if the trip trace has **too many coordinates** (`TooBig`) or if the service is rate-limited/unreachable.
+- The implementation down-samples and retries with fewer points; failures are still recorded per trip via `match_status` so the CSV is always produced.
 
 #### Trip segmentation
 
@@ -351,8 +382,10 @@ Adds a `net_tco2e` column to the per-trip table.
 | Artifact | Path |
 |---|---|
 | GPS map (raw vs smoothed) | `outputs/task3/gps_map.html` |
+| GPS map (raw vs smoothed, dedicated) | `outputs/task3/gps_raw_vs_smoothed_map.html` |
 | Trip segments | `outputs/task3/trip_segments.csv` |
 | Trip carbon credits | `outputs/task3/trip_carbon_credits.csv` |
+| Trip map-matching discrepancy (optional) | `outputs/task3/trip_route_matching.csv` |
 
 ---
 
@@ -375,6 +408,3 @@ Adds a `net_tco2e` column to the per-trip table.
 ## License
 
 MIT License (see `LICENSE` if present).
-
-# renewcred-tasks
-RenewCred Intern Taks

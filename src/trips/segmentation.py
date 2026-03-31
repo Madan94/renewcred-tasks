@@ -148,3 +148,66 @@ def segment_trips(df: pd.DataFrame, *, cfg: TripConfig = TripConfig()) -> pd.Dat
                 )
 
     return pd.DataFrame(rows)
+
+
+def label_trips(df: pd.DataFrame, *, cfg: TripConfig = TripConfig()) -> pd.Series:
+    """
+    Assign trip_id to each telemetry row (NaN when not in a trip) using the same rules as segment_trips().
+    """
+    out = df.copy()
+    out["ts"] = pd.to_datetime(out.get("ts"), utc=True, errors="coerce")
+
+    for c in ["gps_speed_kmh", "battery_soc_pct", "battery_state", "device_status"]:
+        if c in out.columns:
+            if c in {"battery_state", "device_status"}:
+                out[c] = out.get(c).fillna("").astype(str)
+            else:
+                out[c] = pd.to_numeric(out.get(c), errors="coerce")
+        else:
+            out[c] = "" if c in {"battery_state", "device_status"} else np.nan
+
+    out = out.dropna(subset=["device_id", "ts"]).sort_values(["device_id", "ts"], kind="mergesort")
+    trip_id = pd.Series(pd.NA, index=out.index, dtype="object")
+
+    for device_id, d in out.groupby("device_id", sort=False):
+        d = d.reset_index()
+        speed0 = d["gps_speed_kmh"].fillna(0) <= cfg.speed_end_kmh
+        dt = pd.to_datetime(d["ts"], utc=True, errors="coerce").diff().dt.total_seconds().fillna(0).clip(lower=0)
+        stop_dur_sec = np.zeros(len(d), dtype=float)
+        acc = 0.0
+        for i in range(len(d)):
+            if bool(speed0.iloc[i]):
+                acc += float(dt.iloc[i])
+            else:
+                acc = 0.0
+            stop_dur_sec[i] = acc
+
+        in_trip = False
+        trip_num = 0
+        current_id = None
+        for i in range(len(d)):
+            speed = d.loc[i, "gps_speed_kmh"]
+            batt_state = str(d.loc[i, "battery_state"])
+            status = str(d.loc[i, "device_status"])
+
+            is_start = (
+                np.isfinite(speed)
+                and speed > cfg.speed_start_kmh
+                and batt_state == "Discharging"
+                and status == "Active"
+            )
+            is_end = (batt_state == "Charging") or (stop_dur_sec[i] >= cfg.end_sustain_minutes * 60.0)
+
+            if not in_trip and is_start:
+                in_trip = True
+                trip_num += 1
+                current_id = f"{device_id}_{trip_num}"
+
+            if in_trip and current_id is not None:
+                trip_id.loc[d.loc[i, "index"]] = current_id
+
+            if in_trip and is_end:
+                in_trip = False
+                current_id = None
+
+    return trip_id.reindex(df.index)

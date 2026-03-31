@@ -26,19 +26,32 @@ def _prepare(df: pd.DataFrame) -> pd.DataFrame:
 
     out["cell_imbalance"] = out["cell_voltage_max"] - out["cell_voltage_min"]
 
-    g = out.groupby("device_id", sort=False, group_keys=False)
-    out["soc_delta_step"] = g["battery_soc_pct"].diff(10)
-    out["discharge_rate_wh"] = (
-        out["soc_delta_step"] * out["battery_usable_ah"] * out["battery_voltage_v"] * 10.0
-    )
+    def _time_align_delta(d: pd.DataFrame) -> pd.DataFrame:
+        d = d.sort_values("ts", kind="mergesort").copy()
+        right = d[["ts", "battery_soc_pct"]].rename(columns={"ts": "ts_ref", "battery_soc_pct": "soc_ref"})
+        left = d[["ts"]].copy()
+        left["ts_ref"] = left["ts"] - pd.Timedelta(minutes=5)
+        lag = pd.merge_asof(
+            left.sort_values("ts_ref"),
+            right.sort_values("ts_ref"),
+            on="ts_ref",
+            direction="backward",
+        )["soc_ref"].to_numpy()
+        d["soc_delta_5min"] = d["battery_soc_pct"].to_numpy() - lag
+        return d
+
+    out = out.groupby("device_id", sort=False, group_keys=False).apply(_time_align_delta)
+    out["discharge_rate_wh"] = out["soc_delta_5min"] * out["battery_usable_ah"] * out["battery_voltage_v"] * 10.0
+    out["discharge_rate_wh_abs"] = out["discharge_rate_wh"].abs()
 
     def _roll(x: pd.DataFrame) -> pd.DataFrame:
         x = x.set_index("ts", drop=False).sort_index()
-        x["rolling_discharge_mean_1h"] = x["discharge_rate_wh"].rolling("1h", min_periods=5).mean()
+        # Use absolute magnitude for anomaly checks (spikes can occur in either direction).
+        x["rolling_discharge_mean_1h"] = x["discharge_rate_wh_abs"].rolling("1h", min_periods=5).mean()
         x["soh_rolling_max_7d"] = x["battery_soh_pct"].rolling("7D", min_periods=10).max()
         return x.reset_index(drop=True)
 
-    out = g.apply(_roll)
+    out = out.groupby("device_id", sort=False, group_keys=False).apply(_roll)
     return out
 
 
@@ -81,11 +94,14 @@ def build_anomaly_flags_csv(df: pd.DataFrame) -> pd.DataFrame:
     )
     if_conf = isolation_forest_confidence(feat)
 
-    soc_delta = out["battery_soc_pct"].diff().abs().fillna(0)
+    # Used as a weak proxy for SoC volatility; only used for impact scaling.
+    soc_delta = out.groupby("device_id", sort=False)["battery_soc_pct"].diff().abs().fillna(0)
 
     rows = []
     for i in range(n):
         if_conf_i = float(if_conf[i])
+        # Impact is only non-zero for anomalies that can inflate energy / SoC-delta based crediting.
+        # Keep as a conservative estimate in [0,100].
         cc_base = min(100.0, float(soc_delta.iloc[i]) * 0.3 + if_conf_i * 25.0)
 
         if out["cell_imbalance"].iloc[i] > 0.05:
@@ -95,7 +111,8 @@ def build_anomaly_flags_csv(df: pd.DataFrame) -> pd.DataFrame:
                     "ts": out["ts"].iloc[i],
                     "anomaly_type": "cell_imbalance_high",
                     "confidence_score": round(if_conf_i, 4),
-                    "carbon_credit_impact_pct": round(cc_base, 2),
+                    # Voltage imbalance is a health risk but doesn't necessarily inflate SoC-delta.
+                    "carbon_credit_impact_pct": 0.0,
                 }
             )
         if (
@@ -109,19 +126,23 @@ def build_anomaly_flags_csv(df: pd.DataFrame) -> pd.DataFrame:
                     "ts": out["ts"].iloc[i],
                     "anomaly_type": "soh_drop_7d",
                     "confidence_score": round(if_conf_i, 4),
-                    "carbon_credit_impact_pct": round(cc_base, 2),
+                    # SoH impacts capacity assumptions over longer horizons; set low direct credit inflation.
+                    "carbon_credit_impact_pct": round(min(25.0, cc_base), 2),
                 }
             )
         rdm = out["rolling_discharge_mean_1h"].iloc[i]
-        dr = out["discharge_rate_wh"].iloc[i]
-        if pd.notna(rdm) and pd.notna(dr) and rdm != 0 and dr > 3.0 * rdm:
+        dr = out["discharge_rate_wh_abs"].iloc[i]
+        if pd.notna(rdm) and pd.notna(dr) and rdm > 0 and dr > 3.0 * rdm:
+            # Estimate potential over-credit if a spike inflates discharge proxy vs baseline.
+            over = (float(dr) / float(rdm)) - 1.0
+            spike_impact = float(np.clip(over * 100.0, 0.0, 100.0))
             rows.append(
                 {
                     "device_id": out["device_id"].iloc[i],
                     "ts": out["ts"].iloc[i],
                     "anomaly_type": "discharge_spike_vs_rolling",
                     "confidence_score": round(if_conf_i, 4),
-                    "carbon_credit_impact_pct": round(cc_base, 2),
+                    "carbon_credit_impact_pct": round(max(cc_base, spike_impact), 2),
                 }
             )
         if pd.notna(out["battery_temp_c"].iloc[i]) and out["battery_temp_c"].iloc[i] > 40.0:
@@ -131,7 +152,8 @@ def build_anomaly_flags_csv(df: pd.DataFrame) -> pd.DataFrame:
                     "ts": out["ts"].iloc[i],
                     "anomaly_type": "temperature_spike",
                     "confidence_score": round(if_conf_i, 4),
-                    "carbon_credit_impact_pct": round(cc_base, 2),
+                    # Temperature spikes can correlate with sensor drift; keep a moderate conservative impact.
+                    "carbon_credit_impact_pct": round(min(50.0, cc_base), 2),
                 }
             )
 

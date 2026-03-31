@@ -15,7 +15,7 @@ import pandas as pd
 import shap
 import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.model_selection import GridSearchCV
 
 
 def train_xgboost_soc(
@@ -25,12 +25,65 @@ def train_xgboost_soc(
     y_test: pd.Series,
     feature_names: List[str],
     *,
+    meta_train: pd.DataFrame | None = None,
     random_state: int = 42,
     n_splits: int = 3,
 ) -> Tuple[xgb.XGBRegressor, Dict[str, Any]]:
     """
-    XGBoost regressor with TimeSeriesSplit CV over training data.
+    XGBoost regressor with per-device time CV over training data.
     """
+    if meta_train is None:
+        raise ValueError("meta_train is required for per-device time-based CV.")
+
+    meta = meta_train.copy()
+    meta["ts"] = pd.to_datetime(meta["ts"], utc=True, errors="coerce")
+
+    class _PerDeviceTimeSplit:
+        def __init__(self, device_ids: np.ndarray, ts: np.ndarray, n_splits: int):
+            self.device_ids = device_ids
+            self.ts = ts
+            self.n_splits = int(n_splits)
+
+        def get_n_splits(self, X=None, y=None, groups=None) -> int:
+            return self.n_splits
+
+        def split(self, X=None, y=None, groups=None):
+            n = len(self.device_ids)
+            order = np.arange(n)
+            by_dev: Dict[Any, np.ndarray] = {}
+            for dev in pd.unique(self.device_ids):
+                m = self.device_ids == dev
+                idx = order[m]
+                # sort within device by timestamp for proper temporal folds
+                idx = idx[np.argsort(self.ts[m], kind="mergesort")]
+                by_dev[dev] = idx
+
+            for k in range(self.n_splits):
+                tr_parts = []
+                te_parts = []
+                for dev, idx in by_dev.items():
+                    m = len(idx)
+                    if m < (self.n_splits + 2):
+                        continue
+                    # TimeSeriesSplit-like expanding window: split points as fractions
+                    cut1 = int(np.floor((k + 1) / (self.n_splits + 1) * m))
+                    cut2 = int(np.floor((k + 2) / (self.n_splits + 1) * m))
+                    cut1 = max(1, min(cut1, m - 2))
+                    cut2 = max(cut1 + 1, min(cut2, m - 1))
+                    tr_parts.append(idx[:cut1])
+                    te_parts.append(idx[cut1:cut2])
+
+                if tr_parts and te_parts:
+                    tr = np.concatenate(tr_parts)
+                    te = np.concatenate(te_parts)
+                    yield tr, te
+
+    cv = _PerDeviceTimeSplit(
+        meta["device_id"].astype(str).to_numpy(),
+        meta["ts"].to_numpy(),
+        n_splits=n_splits,
+    )
+
     param_grid = {
         "learning_rate": [0.05, 0.1],
         "max_depth": [4, 6],
@@ -39,17 +92,14 @@ def train_xgboost_soc(
     base = xgb.XGBRegressor(
         objective="reg:squarederror",
         random_state=random_state,
-        # Avoid joblib+XGBoost thread explosion / worker crashes on laptops.
         n_jobs=1,
         tree_method="hist",
     )
-    tscv = TimeSeriesSplit(n_splits=n_splits)
     grid = GridSearchCV(
         base,
         param_grid,
-        cv=tscv,
+        cv=cv,
         scoring="neg_mean_squared_error",
-        # Prevent loky worker crashes (TerminatedWorkerError) from parallel CV.
         n_jobs=1,
         verbose=0,
     )

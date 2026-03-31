@@ -19,6 +19,8 @@ FEATURE_COLUMNS: List[str] = [
     "idle_energy_drain",
     "rolling_speed_mean_5min",
     "rolling_temp_std_1h",
+    "rolling_voltage_std_1h",
+    "rolling_imbalance_mean_5min",
 ]
 
 
@@ -88,12 +90,41 @@ def build_soc_dataset(
     # base derived
     out["cell_imbalance"] = out["cell_voltage_max"] - out["cell_voltage_min"]
 
-    step_5min = int((5 * 60) / sequence_cadence_seconds)  # 10 at 30s cadence
-    horizon_steps = int((horizon_minutes * 60) / sequence_cadence_seconds)  # 20 at 30s cadence
-
     g = out.groupby("device_id", sort=False, group_keys=False)
 
-    out["soc_delta_5min"] = g["battery_soc_pct"].diff(step_5min)
+    def _time_align_features(device_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Build time-based lag/lead features that remain valid even when ping cadence drifts.
+        - lag SoC at t-5min via merge_asof (backward)
+        - target SoC at t+H via merge_asof (forward)
+        """
+        d = device_df.sort_values("ts", kind="mergesort").copy()
+        right = d[["ts", "battery_soc_pct"]].rename(columns={"ts": "ts_ref", "battery_soc_pct": "soc_ref"})
+
+        lag_left = d[["ts"]].copy()
+        lag_left["ts_ref"] = lag_left["ts"] - pd.Timedelta(minutes=5)
+        lag = pd.merge_asof(
+            lag_left.sort_values("ts_ref"),
+            right.sort_values("ts_ref"),
+            on="ts_ref",
+            direction="backward",
+        )["soc_ref"].to_numpy()
+
+        d["soc_delta_5min"] = d["battery_soc_pct"].to_numpy() - lag
+
+        lead_left = d[["ts"]].copy()
+        lead_left["ts_ref"] = lead_left["ts"] + pd.Timedelta(minutes=horizon_minutes)
+        lead = pd.merge_asof(
+            lead_left.sort_values("ts_ref"),
+            right.sort_values("ts_ref"),
+            on="ts_ref",
+            direction="forward",
+        )["soc_ref"].to_numpy()
+
+        d["target_soc_t_plus"] = lead
+        return d
+
+    out = g.apply(_time_align_features)
 
     # Energy flow proxy (per PDF): ΔSoC × usable_ah × voltage × 10
     out["delta_soc_5min"] = out["soc_delta_5min"]
@@ -108,9 +139,11 @@ def build_soc_dataset(
         device_df["rolling_soc_std_1h"] = device_df["battery_soc_pct"].rolling("1h", min_periods=10).std()
         device_df["rolling_speed_mean_5min"] = device_df["gps_speed_kmh"].rolling("5min", min_periods=3).mean()
         device_df["rolling_temp_std_1h"] = device_df["battery_temp_c"].rolling("1h", min_periods=10).std()
+        device_df["rolling_voltage_std_1h"] = device_df["battery_voltage_v"].rolling("1h", min_periods=10).std()
+        device_df["rolling_imbalance_mean_5min"] = device_df["cell_imbalance"].rolling("5min", min_periods=3).mean()
         return device_df.reset_index(drop=True)
 
-    out = g.apply(_apply_time_rollings)
+    out = out.groupby("device_id", sort=False, group_keys=False).apply(_apply_time_rollings)
 
     out["temp_deviation"] = out["battery_temp_c"] - out["rolling_7d_mean_temp"]
     out["soh_adjusted_cap"] = out["battery_usable_ah"] * (out["battery_soh_pct"] / 100.0)
@@ -119,9 +152,6 @@ def build_soc_dataset(
 
     # idle energy drain: discharge proxy only when speed == 0
     out["idle_energy_drain"] = np.where(out["gps_speed_kmh"].fillna(0) <= 0.0, out["discharge_rate_wh"], 0.0)
-
-    # supervised target
-    out["target_soc_t_plus"] = out.groupby("device_id", sort=False)["battery_soc_pct"].shift(-horizon_steps)
 
     meta = out[["device_id", "ts"]].copy()
     X = out[FEATURE_COLUMNS].copy()

@@ -115,16 +115,29 @@ def train_lstm_soc(
     if len(Xtr_seq) < 10 or len(Xte_seq) < 1:
         raise RuntimeError("Not enough sequence rows for LSTM; check data size per device.")
 
-    # validation = last 15% of training sequences (time-ordered within concatenated order)
-    n_val = max(1, int(0.15 * len(Xtr_seq)))
-    n_val = min(n_val, max(0, len(Xtr_seq) - 1))
-    if n_val < 1 or len(Xtr_seq) - n_val < 1:
-        n_val = max(1, len(Xtr_seq) // 10)
-    Xv, yv = Xtr_seq[-n_val:], ytr_seq[-n_val:]
-    Xtr, ytr = Xtr_seq[:-n_val], ytr_seq[:-n_val]
-    if len(Xtr) < 1:
-        Xtr, ytr = Xtr_seq, ytr_seq
-        Xv, yv = Xtr_seq[-n_val:], ytr_seq[-n_val:]
+    # validation = last ~15% of sequences PER DEVICE (prevents bias from concatenation order)
+    val_mask = np.zeros(len(Xtr_seq), dtype=bool)
+    for d in pd.unique(dev_tr_seq):
+        m = dev_tr_seq == d
+        idx = np.where(m)[0]
+        if idx.size < 10:
+            continue
+        n_val_d = max(1, int(np.ceil(0.15 * idx.size)))
+        val_mask[idx[-n_val_d:]] = True
+
+    if val_mask.sum() < 1:
+        # fallback: last 10% overall
+        n_val = max(1, int(0.10 * len(Xtr_seq)))
+        val_mask[-n_val:] = True
+
+    tr_mask = ~val_mask
+    if tr_mask.sum() < 1:
+        tr_mask[:] = True
+        val_mask[:] = False
+        val_mask[-max(1, int(0.10 * len(Xtr_seq))):] = True
+
+    Xtr, ytr = Xtr_seq[tr_mask], ytr_seq[tr_mask]
+    Xv, yv = Xtr_seq[val_mask], ytr_seq[val_mask]
 
     model = SoCLSTM(n_features=n_features).to(dev)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
